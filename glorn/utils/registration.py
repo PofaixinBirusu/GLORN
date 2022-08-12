@@ -4,7 +4,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 
-from geotransformer.utils.pointcloud import (
+from glorn.utils.pointcloud import (
     apply_transform,
     get_nearest_neighbor,
     get_rotation_translation_from_transform,

@@ -4,7 +4,7 @@ import open3d as o3d
 from sklearn.manifold import TSNE
 from tqdm import tqdm
 
-from geotransformer.utils.open3d import (
+from glorn.utils.open3d import (
     make_open3d_point_cloud,
     make_open3d_axes,
     make_open3d_corr_lines,

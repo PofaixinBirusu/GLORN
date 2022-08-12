@@ -3,8 +3,8 @@ from functools import partial
 import numpy as np
 import torch
 
-from geotransformer.modules.ops import grid_subsample, radius_search
-from geotransformer.utils.torch import build_dataloader
+from glorn.modules.ops import grid_subsample, radius_search
+from glorn.utils.torch import build_dataloader
 
 
 # Stack mode utilities
