@@ -83,7 +83,7 @@ Please download the metadata [here](https://pan.baidu.com/s/1jFvDn3LciCdrPNKa2YI
                    |--...
 ```
 ### Testing
-1. Please modify the 34th line of code in ```config/config_kitti..py```, and modify the dataset path to the path you saved
+1. Please modify the 34th line of code in ```config/config_kitti.py```, and modify the dataset path to the path you saved
     ```
     _config.data.dataset_root = "[your path]/KITTI"
     ```
