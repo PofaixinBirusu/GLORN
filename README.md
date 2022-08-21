@@ -15,7 +15,7 @@ python setup.py build develop
 ```
 Code has been tested with Ubuntu 20.04, GCC 9.3.0, Python 3.8, PyTorch 1.7.1, CUDA 11.1 and cuDNN 8.1.0.
 ## Pre-training parameters
-We provide pre-training parameters [here](https://pan.baidu.com/s/1JXFv56DhREBbGq5lVUkD8A), and the extraction code is "om1d".
+We provide pre-training parameters [here](https://pan.baidu.com/s/1zpeCMxHMXF8vSFiKemudRg), and the extraction code is "le6o".
 There are two files, "GLORN-3DMatch.pth.tar" and "GLORN-KITTI.pth.tar", please put them in the ```params``` folder.
 ```
 --params--GLORN-3DMatch.pth.tar

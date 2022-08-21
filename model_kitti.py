@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from glorn.modules.kpconv import ConvBlock, ResidualBlock, UnaryBlock, LastUnaryBlock, nearest_upsample
 
-from glorn.modules.ops import point_to_node_partition, index_select
+from glorn.modules.ops import point_to_node_partition, index_select, pairwise_distance
 from glorn.modules.registration import get_node_correspondences
 from glorn.modules.sinkhorn import LearnableLogOptimalTransport
 from glorn.modules.glorn import SuperPointProcessor, SuperPointMatching, SuperPointTargetGenerator, LocalGlobalRegistration
@@ -126,7 +126,69 @@ class GLORNBackBone(nn.Module):
 
         feats_list.reverse()
 
-        return feats_list
+        return feats_list, [feats_s1, feats_s2, feats_s3, feats_s4]
+
+
+class GLORNDescFactor(nn.Module):
+    def __init__(self, output_dim, init_dim, group_norm):
+        super(GLORNDescFactor, self).__init__()
+        self.decoder4 = UnaryBlock(init_dim * 16 + output_dim + 2, init_dim * 4, group_norm)
+        self.decoder3 = UnaryBlock(init_dim * 4 + init_dim * 8, init_dim * 2, group_norm)
+        self.decoder2 = UnaryBlock(init_dim * 2 + init_dim * 4, init_dim, group_norm)
+        self.decoder1 = LastUnaryBlock(init_dim + init_dim * 2, 34)
+        self.overlap_score = nn.Linear(output_dim, 1)
+
+    def forward(self, encoder_feats_list, ref_feats_c, src_feats_c, data_dict):
+        feats_s1, feats_s2, feats_s3, feats_s4 = encoder_feats_list
+        upsampling_list = data_dict['upsampling']
+
+        latent_s5 = torch.cat([ref_feats_c, src_feats_c], dim=0)
+
+        # overlapping factor
+        o_ = self.overlap_score(latent_s5)
+
+        # matching factor
+        ref_feats_c_norm = F.normalize(ref_feats_c.squeeze(0), p=2, dim=1)
+        src_feats_c_norm = F.normalize(src_feats_c.squeeze(0), p=2, dim=1)
+        matching_scores = torch.exp(-pairwise_distance(ref_feats_c_norm, src_feats_c_norm, normalized=True))
+        ref_matching_scores = matching_scores / matching_scores.sum(dim=1, keepdim=True)
+        src_matching_scores = matching_scores / matching_scores.sum(dim=0, keepdim=True)
+        matching_scores = ref_matching_scores * src_matching_scores
+
+        m_ = torch.cat([
+            torch.mm(matching_scores, o_[ref_feats_c_norm.shape[0]:, :]),
+            torch.mm(matching_scores.t(), o_[:ref_feats_c_norm.shape[0], :]),
+        ], dim=0)
+
+        # cat and decode to generate descriptor, o and m
+        latent_s5 = torch.cat([latent_s5, o_, m_], dim=1)
+
+        latent_s4 = nearest_upsample(latent_s5, upsampling_list[3])
+        latent_s4 = torch.cat([latent_s4, feats_s4], dim=1)
+        latent_s4 = self.decoder4(latent_s4)
+
+        latent_s3 = nearest_upsample(latent_s4, upsampling_list[2])
+        latent_s3 = torch.cat([latent_s3, feats_s3], dim=1)
+        latent_s3 = self.decoder3(latent_s3)
+
+        latent_s2 = nearest_upsample(latent_s3, upsampling_list[1])
+        latent_s2 = torch.cat([latent_s2, feats_s2], dim=1)
+        latent_s2 = self.decoder2(latent_s2)
+
+        latent_s1 = nearest_upsample(latent_s2, upsampling_list[0])
+        latent_s1 = torch.cat([latent_s1, feats_s1], dim=1)
+        latent_s1 = self.decoder1(latent_s1)
+
+        descriptor = latent_s1[:, :32]
+        overlapping_factor = latent_s1[:, 32]
+        matching_factor = latent_s1[:, 33]
+
+        ref_length = data_dict['lengths'][0][0].item()
+        ref_descriptors, src_descriptors = descriptor[:ref_length, :], descriptor[ref_length:, :]
+        ref_overlapping_factor, src_overlapping_factor = overlapping_factor[:ref_length], overlapping_factor[ref_length:]
+        ref_matching_factor, src_matching_factor = matching_factor[:ref_length], matching_factor[ref_length:]
+
+        return ref_descriptors, src_descriptors, ref_overlapping_factor, src_overlapping_factor, ref_matching_factor, src_matching_factor
 
 
 class GLORN(nn.Module):
@@ -155,6 +217,12 @@ class GLORN(nn.Module):
             cfg.superpoint_processor.sigma_a,
             cfg.superpoint_processor.angle_k,
             reduction_a=cfg.superpoint_processor.reduction_a,
+        )
+
+        self.desc_factor_generator = GLORNDescFactor(
+            cfg.backbone.output_dim,
+            cfg.backbone.init_dim,
+            cfg.backbone.group_norm
         )
 
         self.coarse_target = SuperPointTargetGenerator(
@@ -237,7 +305,7 @@ class GLORN(nn.Module):
         output_dict['gt_node_corr_overlaps'] = gt_node_corr_overlaps
 
         # 2. KPConvEncoder
-        feats_list = self.backbone(feats, data_dict)
+        feats_list, encoder_feats_list = self.backbone(feats, data_dict)
 
         feats_c = feats_list[-1]
         feats_f = feats_list[0]
@@ -256,6 +324,17 @@ class GLORN(nn.Module):
 
         output_dict['ref_feats_c'] = ref_feats_c_norm
         output_dict['src_feats_c'] = src_feats_c_norm
+
+        # 4. Generate descriptor, overlapping factor and matching factor
+        ref_descriptors, src_descriptors, ref_overlapping_factor, src_overlapping_factor, ref_matching_factor, src_matching_factor = self.desc_factor_generator(
+            encoder_feats_list,
+            ref_feats_c.squeeze(0),
+            src_feats_c.squeeze(0),
+            data_dict
+        )
+        output_dict['ref_descriptors'], output_dict['src_descriptors'] = ref_descriptors, src_descriptors
+        output_dict['ref_overlapping_factor'], output_dict['src_overlapping_factor'] = ref_overlapping_factor, src_overlapping_factor
+        output_dict['ref_matching_factor'], output_dict['src_matching_factor'] = ref_matching_factor, src_matching_factor
 
         # 5. Head for fine level matching
         ref_feats_f = feats_f[:ref_length_f]
