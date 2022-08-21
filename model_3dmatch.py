@@ -139,8 +139,8 @@ class GLORNDescFactor(nn.Module):
         latent_s1 = self.decoder1(latent_s1)
 
         descriptor = latent_s1[:, :32]
-        overlapping_factor = latent_s1[:, 32]
-        matching_factor = latent_s1[:, 33]
+        overlapping_factor = torch.sigmoid(latent_s1[:, 32])
+        matching_factor = torch.sigmoid(latent_s1[:, 33])
 
         ref_length = data_dict['lengths'][0][0].item()
         ref_descriptors, src_descriptors = descriptor[:ref_length, :], descriptor[ref_length:, :]
